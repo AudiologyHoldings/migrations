@@ -469,7 +469,7 @@ class CakeMigration extends Object {
 				foreach ($definition as $field => $details) {
 					if ($field == 'indexes') {
 						foreach ($details as $key => $key_details) {
-							$this->_invokeCallbacks('beforeAction', $type . '_index', array('table' => $table, 'index' => $key));
+							$this->_invokeCallbacks('afterAction', $type . '_index', array('table' => $table, 'index' => $key));
 						}
 						continue;
 					}
@@ -514,8 +514,11 @@ class CakeMigration extends Object {
 				unset($fields['indexes']);
 
 				if ($type == 'drop') {
-					$indexes = array_flip($indexes);
+					if ($indexes == array_filter($indexes, 'is_string')) {
+						$indexes = array_flip($indexes);
+					}
 				}
+
 				$prechecksPassed = true;
 				foreach ($indexes as $key => $key_details) {
 					if (!$this->_invokePrecheck('beforeAction', $type . '_index', array('table' => $table, 'index' => $key))) {
