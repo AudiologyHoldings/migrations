@@ -124,6 +124,15 @@ class CakeMigration extends Object {
 	public $log = array();
 
 /**
+ *
+ * Alters are placed in this array one at a time.  Later,
+ * they are combined into one alter statement per table.
+ *
+ * @var array
+ */
+	public $storedAlters = array();
+
+/**
  * Before migration callback
  *
  * @param string $direction, up or down direction of migration process
@@ -261,6 +270,7 @@ class CakeMigration extends Object {
  */
 	protected function _run() {
 		$result = true;
+		$this->storedAlters = array();
 		//force the order of migration types
 		uksort($this->migration[$this->direction], array($this, 'migration_order'));
 		foreach ($this->migration[$this->direction] as $type => $info) {
@@ -301,6 +311,14 @@ class CakeMigration extends Object {
 				throw new MigrationException($this, sprintf(__d('migrations', '%s'), $e->getMessage()));
 			}
 		}
+
+		// Run all alters that were stored.
+		try {
+			$result = $this->_runStoredAlters();
+		} catch (Exception $e) {
+			throw new MigrationException($this, sprintf(__d('migrations', '%s'), $e->getMessage()));
+		}
+
 		return $result;
 	}
 
@@ -407,7 +425,71 @@ class CakeMigration extends Object {
 	}
 
 /**
- * Alter Table method
+ * Run all alters that were stored by _alterTable().  They will be combined into one statement.
+ *
+ * @return boolean Return true in case of success, otherwise false
+ */
+	protected function _runStoredAlters() {
+		foreach ($this->storedAlters as $table => $alters) {
+			// Generate SQL for this table
+			$sql = $this->db->alterSchema(array($table => $alters));
+
+			// Skip if dry
+			if ($this->dry) {
+				$this->logQuery($sql);
+				continue;
+			}
+
+			// Run ALL beforeAction callbacks.
+			foreach ($alters as $type => $definition) {
+				foreach ($definition as $field => $details) {
+					if ($field == 'indexes') {
+						foreach ($details as $key => $key_details) {
+							$this->_invokeCallbacks('beforeAction', $type . '_index', array('table' => $table, 'index' => $key));
+						}
+						continue;
+					}
+
+					if ($type == 'rename') {
+						$callbackData = array('table' => $table, 'old_name' => $field, 'new_name' => $details);
+					} else {
+						$callbackData = array('table' => $table, 'field' => $field);
+					}
+					$this->_invokeCallbacks('beforeAction', $type . '_field', $callbackData);
+				}
+			}
+
+			// Run combined alters.
+			if (@$this->db->execute($sql) === false) {
+				throw new MigrationException($this, sprintf(__d('migrations', 'SQL Error: %s'), $this->db->error));
+			}
+
+			// Run ALL afterAction callbacks.
+			foreach ($alters as $type => $definition) {
+				foreach ($definition as $field => $details) {
+					if ($field == 'indexes') {
+						foreach ($details as $key => $key_details) {
+							$this->_invokeCallbacks('beforeAction', $type . '_index', array('table' => $table, 'index' => $key));
+						}
+						continue;
+					}
+
+					if ($type == 'rename') {
+						$callbackData = array('table' => $table, 'old_name' => $field, 'new_name' => $details);
+					} else {
+						$callbackData = array('table' => $table, 'field' => $field);
+					}
+					$this->_invokeCallbacks('afterAction', $type . '_field', $callbackData);
+				}
+			}
+		}
+		return true;
+	}
+
+/**
+ * Alter Table method.
+ * Only puts alters to be done inside $this->storedAlters.  You must run _runStoredAlters() after
+ * you are done with all calls to _alterTable().
  *
  * @param string $type Type of operation to be done
  * @param array $tables List of tables and fields
@@ -416,14 +498,34 @@ class CakeMigration extends Object {
  */
 	protected function _alterTable($type, $tables) {
 		foreach ($tables as $table => $fields) {
+
+			// Initalize storedAlters for this table
+			if (empty($this->storedAlters[$table])) {
+				$this->storedAlters[$table] = array(
+					'add'    => array(),
+					'drop'   => array(),
+					'change' => array(),
+				);
+			}
+
 			$indexes = array();
 			if (isset($fields['indexes'])) {
 				$indexes = $fields['indexes'];
 				unset($fields['indexes']);
-			}
 
-			if ($type === 'drop') {
-				$this->_alterIndexes($indexes, $type, $table);
+				if ($type == 'drop') {
+					$indexes = array_flip($indexes);
+				}
+				$prechecksPassed = true;
+				foreach ($indexes as $key => $key_details) {
+					if (!$this->_invokePrecheck('beforeAction', $type . '_index', array('table' => $table, 'index' => $key))) {
+						$prechecksPassed = false;
+						break;
+					}
+				}
+				if ($prechecksPassed) {
+					$this->storedAlters[$table][$type]['indexes'] = $indexes;
+				}
 			}
 
 			foreach ($fields as $field => $col) {
@@ -441,18 +543,14 @@ class CakeMigration extends Object {
 				} else {
 					$data = array('table' => $table, 'field' => $field);
 				}
-				$callbackData = $data;
+
 				if ($this->_invokePrecheck('beforeAction', $type . '_field', $data)) {
 					switch ($type) {
 						case 'add':
-							$sql = $this->db->alterSchema(array(
-								$table => array('add' => array($field => $col))
-							));
+							$this->storedAlters[$table]['add'][$field] = $col;
 							break;
 						case 'drop':
-							$sql = $this->db->alterSchema(array(
-								$table => array('drop' => array($field => array()))
-							));
+							$this->storedAlters[$table]['drop'][$field] = array();
 							break;
 						case 'change':
 							if (!isset($col['type']) || $col['type'] == $tableFields[$field]['type']) {
@@ -463,73 +561,20 @@ class CakeMigration extends Object {
 							if (!empty($def['length']) && !empty($col['type']) && (substr($col['type'], 0, 4) === 'date' || substr($col['type'], 0, 4) === 'time')) {
 								$def['length'] = null;
 							}
-							$sql = $this->db->alterSchema(array(
-								$table => array('change' => array($field => $def))
-							));
+							$this->storedAlters[$table]['change'][$field] = $def;
 							break;
 						case 'rename':
 							$data = array();
 							if (array_key_exists($field, $tableFields)) {
 								$data = $tableFields[$field];
 							}
-							$sql = $this->db->alterSchema(array(
-								$table => array('change' => array($field => array_merge($data, array('name' => $col))))
-							));
+							$this->storedAlters[$table]['change'][$field] = array_merge($data, array('name' => $col));
 							break;
 					}
-
-					if ($this->dry) {
-						$this->logQuery($sql);
-						return true;
-					}
-
-					$this->_invokeCallbacks('beforeAction', $type . '_field', $callbackData);
-					if (@$this->db->execute($sql) === false) {
-						throw new MigrationException($this, sprintf(__d('migrations', 'SQL Error: %s'), $this->db->error));
-					}
-					$this->_invokeCallbacks('afterAction', $type . '_field', $callbackData);
 				}
-			}
-
-			if ($type !== 'drop') {
-				$this->_alterIndexes($indexes, $type, $table);
 			}
 		}
 		return true;
-	}
-
-/**
- * Alter Indexes method
- *
- * @param array $indexes List of indexes
- * @param string $type Type of operation to be done
- * @param string $table table name
- * @throws MigrationException
- * @return void
- */
-	protected function _alterIndexes($indexes, $type, $table) {
-		foreach ($indexes as $key => $index) {
-			if (is_numeric($key)) {
-				$key = $index;
-				$index = array();
-			}
-			$sql = $this->db->alterSchema(array(
-				$table => array($type => array('indexes' => array($key => $index)))
-			));
-
-			if ($this->dry) {
-				$this->logQuery($sql);
-				return true;
-			}
-
-			if ($this->_invokePrecheck('beforeAction', $type . '_index', array('table' => $table, 'index' => $key))) {
-				$this->_invokeCallbacks('beforeAction', $type . '_index', array('table' => $table, 'index' => $key));
-				if (@$this->db->execute($sql) === false) {
-					throw new MigrationException($this, sprintf(__d('migrations', 'SQL Error: %s'), $this->db->error));
-				}
-			}
-			$this->_invokeCallbacks('afterAction', $type . '_index', array('table' => $table, 'index' => $key));
-		}
 	}
 
 /**
