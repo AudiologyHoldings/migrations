@@ -14,7 +14,6 @@ App::uses('MigrationShell', 'Migrations.Console/Command');
 
 /**
  * TestMigrationShell
- *
  */
 class TestMigrationShell extends MigrationShell {
 
@@ -64,7 +63,6 @@ class TestMigrationShell extends MigrationShell {
 
 /**
  * MigrationShellTest
- *
  */
 class MigrationShellTest extends CakeTestCase {
 
@@ -121,12 +119,11 @@ class MigrationShellTest extends CakeTestCase {
 		CakePlugin::unload('TestMigrationPlugin');
 		CakePlugin::unload('TestMigrationPlugin2');
 		CakePlugin::unload('TestMigrationPlugin3');
+		CakePlugin::unload('TestMigrationPlugin4');
 		App::build(array('Plugin' => $this->plugins), true);
 		App::objects('plugins', null, false);
 		unset($this->Dispatcher, $this->Shell, $this->plugins);
-		foreach (glob(TMP . 'tests' . DS . '*.php') as $f) {
-			unlink($f);
-		}
+		$this->_unlink(glob(TMP . 'tests' . DS . '*.php'));
 	}
 
 /**
@@ -163,14 +160,23 @@ class MigrationShellTest extends CakeTestCase {
 		$this->assertEquals($this->Shell->type, 'TestMigrationPlugin');
 		$this->Shell->params = array(
 			'connection' => 'test',
+			'name' => 'MigrationName',
 			'plugin' => 'Migrations',
 			'no-auto-init' => false,
 			'dry' => false,
+			'skip' => 'test1',
 			'precheck' => 'Migrations.PrecheckException'
 		);
 		$this->Shell->startup();
+		$this->assertEquals($this->Shell->migrationName, 'MigrationName');
 		$this->assertEquals($this->Shell->connection, 'test');
 		$this->assertEquals($this->Shell->type, 'Migrations');
+		$this->assertEquals($this->Shell->skip, 'test1');
+
+		$this->Shell->expects($this->any())->method('in')->will($this->returnValue('test'));
+		$this->Shell->expects($this->any())->method('_startMigrationConnection')->will($this->returnValue('test'));
+		$this->Shell->startup();
+		$this->assertEquals($this->Shell->migrationConnection, 'test');
 	}
 
 /**
@@ -203,7 +209,9 @@ class MigrationShellTest extends CakeTestCase {
 			'direction' => 'up',
 			'version' => 1,
 			'dry' => false,
-			'precheck' => null)));
+			'precheck' => null,
+			'skip' => array()))
+		);
 		$this->Shell->args = array('up');
 		$this->assertTrue($this->Shell->run());
 
@@ -225,7 +233,9 @@ class MigrationShellTest extends CakeTestCase {
 			'direction' => 'down',
 			'version' => 1,
 			'dry' => false,
-			'precheck' => null)));
+			'precheck' => null,
+			'skip' => array()))
+		);
 		$this->Shell->args = array('down');
 		$this->assertTrue($this->Shell->run());
 
@@ -237,7 +247,8 @@ class MigrationShellTest extends CakeTestCase {
 			'version' => 10,
 			'direction' => 'up',
 			'dry' => false,
-			'precheck' => null)));
+			'precheck' => null,
+			'skip' => array())));
 		$this->Shell->args = array('all');
 		$this->assertTrue($this->Shell->run());
 
@@ -249,7 +260,8 @@ class MigrationShellTest extends CakeTestCase {
 			'version' => 0,
 			'direction' => 'down',
 			'dry' => false,
-			'precheck' => null)));
+			'precheck' => null,
+			'skip' => array())));
 		$this->Shell->args = array('reset');
 		$this->assertTrue($this->Shell->run());
 
@@ -618,7 +630,7 @@ TEXT;
  */
 	public function testWriteMigration() {
 		// Remove if exists
-		$this->_unlink('12345_migration_test_file.php');
+		$this->_unlink(array(TMP . 'tests' . DS . '12345_migration_test_file.php'));
 
 		$users = $this->tables['users'];
 		$users['indexes'] = array('UNIQUE_USER' => array('column' => 'user', 'unique' => true));
@@ -680,7 +692,63 @@ TEXT;
 	);
 TEXT;
 		$this->assertEquals($result, str_replace("\r\n", "\n", $expected));
-		$this->_unlink('12345_migration_test_file.php');
+		$this->_unlink(array(TMP . 'tests' . DS . '12345_migration_test_file.php'));
+	}
+
+/**
+ * Test writing migration that only contains index changes
+ *
+ * @return void
+ * @link https://github.com/CakeDC/migrations/issues/189
+ */
+	public function testWriteMigrationIndexesOnly() {
+		$this->_unlink(array(TMP . 'tests' . DS . '12346_migration_test_file.php'));
+
+		$users = $this->tables['users'];
+		$users['indexes'] = array('UNIQUE_USER' => array('column' => 'user', 'unique' => true));
+		$migration = array(
+			'up' => array(
+				'create_field' => array(
+					'posts' => array(
+						'indexes' => array(
+							'USER_ID' => array('column' => 'user_id', 'unique' => false)
+						)
+					)
+				)
+			),
+			'down' => array(
+				'drop_field' => array(
+					'posts' => array(
+						'indexes' => array('USER_ID')
+					)
+				)
+			)
+		);
+
+		$this->assertTrue($this->Shell->writeMigration('migration_test_file', 12346, $migration));
+		$this->assertTrue(file_exists(TMP . 'tests' . DS . '12346_migration_test_file.php'));
+
+		$result = $this->_getMigrationVariable(TMP . 'tests' . DS . '12346_migration_test_file.php');
+		$expected = <<<TEXT
+	public \$migration = array(
+		'up' => array(
+			'create_field' => array(
+				'posts' => array(
+					'indexes' => array(
+						'USER_ID' => array('column' => 'user_id', 'unique' => false),
+					),
+				),
+			),
+		),
+		'down' => array(
+			'drop_field' => array(
+				'posts' => array('indexes' => array('USER_ID')),
+			),
+		),
+	);
+TEXT;
+		$this->assertEquals($result, str_replace("\r\n", "\n", $expected));
+		$this->_unlink(array(TMP . 'tests' . DS . '12346_migration_test_file.php'));
 	}
 
 /**
@@ -691,13 +759,14 @@ TEXT;
 	public function testGenerate() {
 		$this->Shell->expects($this->at(0))->method('in')->will($this->returnValue('n'));
 		$this->Shell->expects($this->at(1))->method('in')->will($this->returnValue('n'));
-		$this->Shell->expects($this->at(2))->method('in')->will($this->returnValue('Initial Schema'));
+		$this->Shell->expects($this->at(2))->method('in')->will($this->returnValue('n'));
+		$this->Shell->expects($this->at(3))->method('in')->will($this->returnValue('Initial Schema'));
 
+		$this->Shell->params['overwrite'] = false;
 		$this->Shell->generate();
+
 		$files = glob(TMP . 'tests' . DS . '*initial_schema.php');
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 		$this->assertNotEmpty(preg_grep('/([0-9])+_initial_schema\.php$/i', $files));
 	}
 
@@ -710,15 +779,16 @@ TEXT;
 		$this->Shell->expects($this->atLeastOnce())->method('err');
 		$this->Shell->expects($this->at(0))->method('in')->will($this->returnValue('n'));
 		$this->Shell->expects($this->at(1))->method('in')->will($this->returnValue('n'));
-		$this->Shell->expects($this->at(2))->method('in')->will($this->returnValue('002 invalid name'));
-		$this->Shell->expects($this->at(4))->method('in')->will($this->returnValue('invalid-name'));
-		$this->Shell->expects($this->at(6))->method('in')->will($this->returnValue('create some sample_data'));
+		$this->Shell->expects($this->at(2))->method('in')->will($this->returnValue('n'));
+		$this->Shell->expects($this->at(3))->method('in')->will($this->returnValue('002 invalid name'));
+		$this->Shell->expects($this->at(5))->method('in')->will($this->returnValue('invalid-name'));
+		$this->Shell->expects($this->at(7))->method('in')->will($this->returnValue('create some sample_data'));
 
+		$this->Shell->params['overwrite'] = false;
 		$this->Shell->generate();
+
 		$files = glob(TMP . 'tests' . DS . '*create_some_sample_data.php');
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 		$this->assertNotEmpty(preg_grep('/([0-9])+_create_some_sample_data\.php$/i', $files));
 	}
 
@@ -733,25 +803,26 @@ TEXT;
 		$this->Shell->expects($this->at(2))->method('in')->will($this->returnValue('n'));
 		$this->Shell->expects($this->at(3))->method('in')->will($this->returnValue('drop slug field'));
 		$this->Shell->expects($this->at(4))->method('in')->will($this->returnValue('y'));
-		$this->Shell->expects($this->at(5))->method('dispatchShell')->with('schema generate --connection test --force');
+		$this->Shell->expects($this->at(5))->method('dispatchShell')->with('schema generate --connection test --force --file schema.php --name TestMigrationPlugin4');
 
 		$this->Shell->Version->expects($this->any())->method('getMapping')->will($this->returnCallback(array($this, 'returnMapping')));
 
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*drop_slug_field.php'));
-		$this->Shell->params['force'] = true;
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*drop_slug_field.php');
 		$this->assertNotEmpty($files);
 
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 		$this->assertNotRegExp('/\'schema_migrations\'/', $result);
 
 		$pattern = <<<TEXT
 /			'drop_field' => array\(
-				'articles' => array\('slug',\),
+				'articles' => array\('slug'\),
 			\),/
 TEXT;
 		$this->assertRegExp(str_replace("\r\n", "\n", $pattern), $result);
@@ -773,6 +844,50 @@ TEXT;
 	}
 
 /**
+ * TestGenerateInverseComparison method
+ *
+ * @return void
+ */
+	public function testGenerateInverseComparison() {
+		$this->Shell->type = 'TestMigrationPlugin4';
+		$this->Shell->expects($this->at(0))->method('in')->will($this->returnValue('n'));
+		$this->Shell->expects($this->at(1))->method('in')->will($this->returnValue('y'));
+		$this->Shell->expects($this->at(3))->method('in')->will($this->returnValue('n'));
+		$this->Shell->expects($this->at(4))->method('in')->will($this->returnValue('create slug field'));
+
+		$this->Shell->Version->expects($this->any())->method('getMapping')->will($this->returnCallback(array($this, 'returnMapping')));
+
+		$this->assertEmpty(glob(TMP . 'tests' . DS . '*create_slug_field.php'));
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
+		$this->Shell->generate();
+		$files = glob(TMP . 'tests' . DS . '*create_slug_field.php');
+		$this->assertNotEmpty($files);
+
+		$result = $this->_getMigrationVariable(current($files));
+		$this->_unlink($files);
+		$this->assertNotRegExp('/\'schema_migrations\'/', $result);
+
+		$pattern = <<<TEXT
+/			'create_field' => array\(
+				'articles' => array\(
+					'slug' => array\('type' => 'string', 'null' => false, 'after' => 'title'\),
+				\),
+			\),/
+TEXT;
+		$this->assertRegExp(str_replace("\r\n", "\n", $pattern), $result);
+
+		$pattern = <<<TEXT
+/			'drop_field' => array\(
+				'articles' => array\('slug'\),
+			\),/
+TEXT;
+		$this->assertRegExp(str_replace("\r\n", "\n", $pattern), $result);
+	}
+
+/**
  * testGenerateFromCliParamsCreateTable method
  * test the case of using a command such as:
  * app/Console/cake Migrations.migration generate create_products id created modified name description:text in_stock:boolean price:float stock_count:integer
@@ -784,14 +899,15 @@ TEXT;
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*create_products.php'));
 
 		$this->Shell->args = array('create_products', 'id', 'created', 'modified', 'name', 'description:text', 'in_stock:boolean', 'price:float', 'stock_count:integer');
-		$this->Shell->params['force'] = true;
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*create_products.php');
 		$this->assertNotEmpty($files);
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 
 		$expected = file_get_contents(CakePlugin::path('Migrations') . '/Test/Fixture/test_migration_create_table_from_cli.txt');
 		$this->assertEquals($expected, $result);
@@ -809,14 +925,15 @@ TEXT;
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*drop_products.php'));
 
 		$this->Shell->args = array('drop_products');
-		$this->Shell->params['force'] = true;
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*drop_products.php');
 		$this->assertNotEmpty($files);
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 
 		$expected = file_get_contents(CakePlugin::path('Migrations') . '/Test/Fixture/test_migration_drop_table_from_cli.txt');
 		$this->assertEquals($expected, $result);
@@ -834,14 +951,15 @@ TEXT;
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*add_all_fields_to_products.php'));
 
 		$this->Shell->args = array('add_all_fields_to_products', 'id', 'created', 'modified', 'name', 'description:text', 'in_stock:boolean', 'price:float', 'stock_count:integer');
-		$this->Shell->params['force'] = true;
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*add_all_fields_to_products.php');
 		$this->assertNotEmpty($files);
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 
 		$expected = file_get_contents(CakePlugin::path('Migrations') . '/Test/Fixture/test_migration_add_fields_from_cli.txt');
 		$this->assertEquals($expected, $result);
@@ -859,14 +977,15 @@ TEXT;
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*remove_name_and_desc_from_products.php'));
 
 		$this->Shell->args = array('remove_name_and_desc_from_products', 'name', 'description');
-		$this->Shell->params['force'] = true;
+		$this->Shell->params = array(
+			'force' => true,
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*remove_name_and_desc_from_products.php');
 		$this->assertNotEmpty($files);
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 
 		$expected = file_get_contents(CakePlugin::path('Migrations') . '/Test/Fixture/test_migration_remove_fields_from_cli.txt');
 		$this->assertEquals($expected, $result);
@@ -886,17 +1005,18 @@ TEXT;
 
 		$this->assertEmpty(glob(TMP . 'tests' . DS . '*schema_dump.php'));
 		$this->Shell->type = 'TestMigrationPlugin2';
-		$this->Shell->params['force'] = true;
-		$this->Shell->params['dry'] = false;
-		$this->Shell->params['precheck'] = 'Migrations.PrecheckException';
+		$this->Shell->params = array(
+			'force' => true,
+			'dry' => false,
+			'precheck' => 'Migrations.PrecheckException',
+			'overwrite' => false
+		);
 		$this->Shell->generate();
 		$files = glob(TMP . 'tests' . DS . '*schema_dump.php');
 		$this->assertNotEmpty($files);
 
 		$result = $this->_getMigrationVariable(current($files));
-		foreach ($files as $f) {
-			unlink($f);
-		}
+		$this->_unlink($files);
 
 		$expected = file_get_contents(CakePlugin::path('Migrations') . '/Test/Fixture/test_migration.txt');
 		$expected = str_replace("\r\n", "\n", $expected);
@@ -962,15 +1082,13 @@ TEXT;
 /**
  * Unlink test files from filesystem
  *
- * @param mixed files
+ * @param array Absolute paths to unlink
  * @return void
  */
-	protected function _unlink() {
-		$files = func_get_args();
+	protected function _unlink($files) {
 		foreach ($files as $file) {
-			@unlink(TMP . 'tests' . DS . $file);
+			@unlink($file);
 		}
 	}
 
 }
-
