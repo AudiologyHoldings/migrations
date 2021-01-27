@@ -602,6 +602,9 @@ class CakeMigration extends CakeObject {
 		DboSource::$methodCache = array();
 		$keys = Cache::configured();
 		foreach ($keys as $key) {
+			if ($key == 'session') {
+				continue;
+			}
 			Cache::clear(false, $key);
 		}
 		ClassRegistry::flush();
