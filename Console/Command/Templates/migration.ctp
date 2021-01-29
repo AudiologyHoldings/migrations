@@ -20,6 +20,14 @@ class <?php echo $class; ?> extends CakeMigration {
 	public $description = '<?php echo $name; ?>';
 
 /**
+* When clearning cache, default is to exclude the session key
+* true = Don't exclude the session key, this will logout user sessions!
+* false = default - exclude session key from being cleared
+* @var bool
+*/
+	public $clearSessionCache = false;
+
+/**
  * Actions to be performed
  *
  * @var array $migration

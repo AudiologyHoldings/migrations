@@ -24,6 +24,14 @@ class CakeMigration extends CakeObject {
 	public $description = '';
 
 /**
+* When clearning cache, default is to exclude the session key
+* true = Don't exclude the session key, this will logout user sessions!
+* false = default - exclude session key from being cleared
+* @var bool
+*/
+	public $clearSessionCache = false;
+
+/**
  * Migration dependencies
  *
  * @var array
@@ -238,7 +246,11 @@ class CakeMigration extends CakeObject {
 		try {
 			$this->_invokeCallbacks('beforeMigration', $direction);
 			$result = $this->_run();
-			$this->_clearAllExceptSessionCache();
+			if ($this->clearSessionCache) {
+				$this->_clearAllCache();
+			} else {
+				$this->_clearAllExceptSessionCache();
+			}
 			$this->_invokeCallbacks('afterMigration', $direction);
 
 			if (!$result) {
