@@ -24,6 +24,14 @@ class CakeMigration extends CakeObject {
 	public $description = '';
 
 /**
+* When clearning cache, default is to exclude the session key
+* true = Don't exclude the session key, this will logout user sessions!
+* false = default - exclude session key from being cleared
+* @var bool
+*/
+	public $clearSessionCache = false;
+
+/**
  * Migration dependencies
  *
  * @var array
@@ -238,7 +246,11 @@ class CakeMigration extends CakeObject {
 		try {
 			$this->_invokeCallbacks('beforeMigration', $direction);
 			$result = $this->_run();
-			$this->_clearCache();
+			if ($this->clearSessionCache) {
+				$this->_clearAllCache();
+			} else {
+				$this->_clearAllExceptSessionCache();
+			}
 			$this->_invokeCallbacks('afterMigration', $direction);
 
 			if (!$result) {
@@ -595,13 +607,17 @@ class CakeMigration extends CakeObject {
  * Without it any model operations will use cached data instead of real/modified
  * data.
  *
+ * @param array excludeArray - Array of cache keys to skip over when clearing the rest
  * @return void
  */
-	protected function _clearCache() {
+	protected function _clearCache($excludeArray = []) {
 		// Clear the cache
 		DboSource::$methodCache = array();
 		$keys = Cache::configured();
 		foreach ($keys as $key) {
+			if (in_array($key, $excludeArray)) {
+				continue;
+			}
 			Cache::clear(false, $key);
 		}
 		ClassRegistry::flush();
@@ -610,6 +626,24 @@ class CakeMigration extends CakeObject {
 		if ($this->Version instanceof MigrationVersion) {
 			$this->Version->initVersion();
 		}
+	}
+/**
+ * Clear all cache, including session cache
+ * 
+ * @return void
+ */
+	protected function _clearAllCache()
+	{
+		$this->_clearCache();
+	}
+/**
+ *  Clear all cache except session cache
+ *	Passing single element array to _clearCache with 'session' to exclude the 'session' cache key
+ * @return void
+ */
+	protected function _clearAllExceptSessionCache()
+	{
+		$this->_clearCache(['session']);
 	}
 
 /**
