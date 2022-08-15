@@ -374,10 +374,10 @@ class MigrationVersion {
 
 				try {
 					$hostName = gethostname();
-					echo __d('migrations', "Migration starting on $hostName: ". date('Y-m-d H:i:s') . "\n");
+					echo __d('migrations', "Migration starting on $hostName: ". date('c') . "\n");
 					$result = $migration->run($direction, $options);
 					$this->log[$info['name']] = $migration->getQueryLog();
-					echo __d('migrations', "Migration complete on $hostName: ". date('Y-m-d H:i:s') . "\n");
+					echo __d('migrations', "Migration complete on $hostName: ". date('c') . "\n");
 				} catch (MigrationException $migrationException){
 					throw $migrationException; // throw to MigrationShell::_execute
 				} catch (Exception $exception) {
